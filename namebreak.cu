@@ -14,51 +14,14 @@ __device__ volatile int d_foundMatchFlag = 0;
 __device__ __constant__ char d_alphabet[ALPHABET_SIZE + 1] = " !&'()+,-.0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_";
 const std::string alphabet = " !&'()+,-.0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_";
 
-//__device__ __constant__ char d_prefix[] = "PORTRAIT\\U";
-__device__ __constant__ char d_prefix[] = "PORTRAIT\\T";
-__device__ __constant__ char d_suffix[] = "FID00.SMK";
-//const std::string prefix = "PORTRAIT\\U";
-const std::string prefix = "PORTRAIT\\T";
-const std::string suffix = "FID00.SMK";
-
-/*
-// <reference 1>
-__device__ __constant__ char d_lowerBound[] = "PORTRAIT\\UDTEMPLAR\\UDTTLK02.SMK";
-__device__ __constant__ char d_upperBound[] = "PORTRAIT\\UFENDRAG\\UFDFID00.SMK";
-__device__ __constant__ char lowerBound[] = "DTEMPLARUDT";
-__device__ __constant__ char upperBound[] = "FENDRAGUFD";
-const std::string upperBoundLimit = "FENDRAGUFE      ";
-const uint32_t target_hash_A = 0xD962B57C; // UDUKE\UDUFID00.SMK
-const uint32_t target_hash_B = 0xC990B138; // UDUKE\UDUFID00.SMK
-// </reference 1>
-*/
-/*
-// <reference 2>
-__device__ __constant__ char d_lowerBound[] = "PORTRAIT\\UFLAG1\\UF1TLK00.SMK";
-__device__ __constant__ char d_upperBound[] = "PORTRAIT\\UFLAG3\\UF3FID00.SMK";
-__device__ __constant__ char lowerBound[] = "FLAG1UF1";
-__device__ __constant__ char upperBound[] = "FLAG3UF3";
-const std::string upperBoundLimit = "FLAG3UF4        ";
-const uint32_t target_hash_A = 0x17D0F420; // UFLAG2\UF2FID00.SMK
-const uint32_t target_hash_B = 0xA42467DA; // UFLAG2\UF2FID00.SMK
-// </reference 2>
-*/
-// <reference 3>
-__device__ __constant__ char d_lowerBound[] = "PORTRAIT\\TTANK\\TTATLK02.SMK";
-__device__ __constant__ char d_upperBound[] = "PORTRAIT\\TVULTURE\\TVUFID00.SMK";
-__device__ __constant__ char lowerBound[] = "TANKTTA";
-__device__ __constant__ char upperBound[] = "VULTURETVU";
-const std::string upperBoundLimit = "VULTURETVV     ";
-const uint32_t target_hash_A = 0xAEB771C4; // TVESSEL\TVEFID00.SMK
-const uint32_t target_hash_B = 0x1162462A; // TVESSEL\TVEFID00.SMK
-// </reference 3>
-
-//const uint32_t target_hash_A = 0xEAE4D0CB; // UFENDRAG\UFDFID00.SMK
-//const uint32_t target_hash_B = 0x28E9A64B; // UFENDRAG\UFDFID00.SMK
-
-//$FIRSTWORD = "KHADNCR             ";
-//$LASTWORD  = "MENGSKUME___________";
-
+__device__ __constant__ char d_prefix[64];
+__device__ __constant__ char d_suffix[64];
+__device__ __constant__ char d_lowerBound[64];
+__device__ __constant__ char d_upperBound[64];
+__device__ __constant__ char lowerBound[64];
+__device__ __constant__ char upperBound[64];
+__device__ __constant__ short d_prefix_size;
+__device__ __constant__ short d_suffix_size;
 
 __device__ __constant__ uint32_t d_cryptTable[0x500];
 
@@ -95,12 +58,12 @@ __device__ void indexToZ(uint64_t index, int zLen, char* outZ) {
     }
 }
 
-uint64_t zStringToIndex(const std::string& z) {
+uint64_t stringToIndex(const std::string& str) {
     uint64_t index = 0;
-    for (char c : z) {
+    for (char c : str) {
         size_t pos = alphabet.find(c);
         if (pos == std::string::npos) {
-            fprintf(stderr, "Invalid character in Z: '%c'\n", c);
+            fprintf(stderr, "Invalid character in string: '%c'\n", c);
             exit(1);
         }
         index = index * alphabet.size() + pos;
@@ -109,9 +72,8 @@ uint64_t zStringToIndex(const std::string& z) {
 }
 
 __device__ void buildCandidate(const char* Z, int zLen, int split, char* out) {
-    int i = 0;
-    memcpy(out + i, d_prefix, sizeof(d_prefix) - 1);
-    i += sizeof(d_prefix) - 1;
+    memcpy(out, d_prefix, d_prefix_size);
+    short i = d_prefix_size;
 
     memcpy(out + i, Z, split);
     i += split;
@@ -121,8 +83,22 @@ __device__ void buildCandidate(const char* Z, int zLen, int split, char* out) {
     memcpy(out + i, Z + split, zLen - split);
     i += zLen - split;
 
-    memcpy(out + i, d_suffix, sizeof(d_suffix) - 1);
-    i += sizeof(d_suffix) - 1;
+    memcpy(out + i, d_suffix, d_suffix_size);
+    i += d_suffix_size;
+
+    out[i] = '\0';
+}
+
+__device__ void buildCandidateWithoutBackslash(const char* Z, int zLen, char* out) {
+    short i = 0;
+    memcpy(out + i, d_prefix, d_prefix_size);
+    i += d_prefix_size;
+
+    memcpy(out + i, Z, zLen);
+    i += zLen;
+
+    memcpy(out + i, d_suffix, d_suffix_size);
+    i += d_suffix_size;
 
     out[i] = '\0';
 }
@@ -157,31 +133,44 @@ __global__ void bruteForceKernel(
     char candidate[MAX_FILENAME_LEN];
 
     indexToZ(idx, zLen, Z);
-//    if (!inBounds(Z)) {
-//        printf("Outside bounds: '%s'\n", Z);
-//        return;
-//    }
+
+    ///
+    buildCandidateWithoutBackslash(Z, zLen, candidate);
+    uint32_t hashA = mpqHash(candidate);
+    if (hashA == targetA) {
+        printf("Hash A matches: %s\n", candidate);
+
+        uint32_t hashB = mpqHashSeed2(candidate);
+        if (hashB == targetB) {
+            // DONE
+            printf("BOTH HASHES MATCH: %s\n", candidate);
+            d_foundMatchFlag = 1;
+        }
+        int slot = atomicAdd(d_matchCount, 1);
+        if (slot < MAX_MATCHES) {
+            memcpy(&d_matches[slot * MAX_FILENAME_LEN], candidate, MAX_FILENAME_LEN);
+        }
+    }
+    ///
 
     for (int split = 1; split < zLen; ++split) {
         buildCandidate(Z, zLen, split, candidate);
 
-        //if (inBounds(candidate)) {
-            uint32_t hashA = mpqHash(candidate);
-            if (hashA == targetA) {
-                printf("Hash A matches: %s\n", candidate);
+        uint32_t hashA = mpqHash(candidate);
+        if (hashA == targetA) {
+            printf("Hash A matches: %s\n", candidate);
 
-                uint32_t hashB = mpqHashSeed2(candidate);
-                if (hashB == targetB) {
-                    // DONE
-                    printf("BOTH HASHES MATCH: %s\n", candidate);
-                    d_foundMatchFlag = 1;
-                }
-                int slot = atomicAdd(d_matchCount, 1);
-                if (slot < MAX_MATCHES) {
-                    memcpy(&d_matches[slot * MAX_FILENAME_LEN], candidate, MAX_FILENAME_LEN);
-                }
+            uint32_t hashB = mpqHashSeed2(candidate);
+            if (hashB == targetB) {
+                // DONE
+                printf("BOTH HASHES MATCH: %s\n", candidate);
+                d_foundMatchFlag = 1;
             }
-        //}
+            int slot = atomicAdd(d_matchCount, 1);
+            if (slot < MAX_MATCHES) {
+                memcpy(&d_matches[slot * MAX_FILENAME_LEN], candidate, MAX_FILENAME_LEN);
+            }
+        }
     }
 }
 
@@ -237,7 +226,7 @@ int runCudaBatch(int zLen, uint64_t startIdx, uint64_t count, uint32_t targetA, 
 
 
 
-std::string getFilename(const char* path) {
+std::string getStartCandidate(std::string path, std::string prefix, std::string suffix) {
     std::string full = path;
 
     // Remove prefix and suffix
@@ -248,7 +237,7 @@ std::string getFilename(const char* path) {
 
     std::string middle = full.substr(prefix.size(), full.size() - prefix.size() - suffix.size());
 
-    // Remove backslash between X and Y
+    // Remove backslash
     middle.erase(std::remove(middle.begin(), middle.end(), '\\'), middle.end());
     return middle;
 }
@@ -262,49 +251,127 @@ std::string make_bound_string(std::string input, int zLen) {
     return result.substr(0, zLen);
 }
 
+std::string remove_prefix_and_suffix(std::string base, std::string prefix, std::string suffix) {
+    std::string str = base;
+    if (str.find(prefix) == 0) {
+        str = str.substr(prefix.length());
+    }
+    if (str.size() >= suffix.size() && str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        str = str.substr(0, str.size() - suffix.size());
+    }
+    str.erase(std::remove(str.begin(), str.end(), '\\'), str.end());
+    return str;
+}
+
+std::string getLowerBound(const std::string& input) {
+    std::string result = input;
+    if (result.empty()) return std::string(16, ' ');
+
+    // Find index of the last character
+    char& lastChar = result.back();
+    auto pos = alphabet.find(lastChar);
+    if (pos == std::string::npos || pos + 1 >= alphabet.size()) {
+        fprintf(stderr, "Cannot bump last character or character not in alphabet\n");
+    }
+    lastChar = alphabet[pos - 1];
+
+    // Pad with underscores to length 16
+    result.resize(16, '_');
+    return result;
+}
+
+std::string getUpperBound(const std::string& input) {
+    std::string result = input;
+    if (result.empty()) return std::string(16, ' ');
+
+    // Find index of the last character
+    char& lastChar = result.back();
+    auto pos = alphabet.find(lastChar);
+    if (pos == std::string::npos || pos + 1 >= alphabet.size()) {
+        fprintf(stderr, "Cannot bump last character or character not in alphabet\n");
+    }
+    lastChar = alphabet[pos + 1];
+
+    // Pad with spaces to length 16
+    result.resize(16, ' ');
+    return result;
+}
+
+
 int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s <starting_filename>\n", argv[0]);
+    if (argc < 8) {
+        fprintf(stderr, "Usage: %s <startCandidate> <prefix> <suffix> <lowerBound> <upperBound> <targetHashA> <targetHashB>\n", argv[0]);
         return 1;
     }
-//    printf("Starting index: %llu for filename '%s'\n", (unsigned long long)startIdx, start_filename.c_str());
+    if (alphabet.size() != ALPHABET_SIZE) {
+        // This is just a check to make sure we don't change the alphabet without updating its size
+        fprintf(stderr, "Alphabet size mismatch. Expected %d, got %zu\n", ALPHABET_SIZE, alphabet.size());
+        return 1;
+    }
+
+    std::string prefix = argv[2];
+    std::string suffix = argv[3];
+    std::string start_candidate = getStartCandidate(argv[1], prefix, suffix);
+    std::string lowerBound = argv[4];
+    std::string upperBound = argv[5];
+    uint32_t target_hash_A = std::stoul(argv[6], nullptr, 16);
+    uint32_t target_hash_B = std::stoul(argv[7], nullptr, 16);
+
+    std::string lower = remove_prefix_and_suffix(lowerBound, prefix, suffix);
+    std::string upper = remove_prefix_and_suffix(upperBound, prefix, suffix);
+    lower = lower.substr(0, lower.size() - suffix.size());
+
+    short prefix_size = prefix.size();
+    short suffix_size = suffix.size();
+    cudaMemcpyToSymbol(d_prefix_size, &prefix_size, sizeof(prefix_size));
+    cudaMemcpyToSymbol(d_suffix_size, &suffix_size, sizeof(suffix_size));
+    cudaMemcpyToSymbol(d_prefix, prefix.c_str(), prefix_size + 1);
+    cudaMemcpyToSymbol(d_suffix, suffix.c_str(), suffix_size + 1);
+    cudaMemcpyToSymbol(d_lowerBound, lowerBound.c_str(), lowerBound.size() + 1);
+    cudaMemcpyToSymbol(d_upperBound, upperBound.c_str(), upperBound.size() + 1);
+    cudaMemcpyToSymbol(lowerBound, lower.c_str(), lower.size() + 1);
+    cudaMemcpyToSymbol(upperBound, upper.c_str(), upper.size() + 1);
+
+    std::string lowerBoundLimit = getLowerBound(lower);
+    std::string upperBoundLimit = getUpperBound(upper);
+
+    printf("candidate: '%s'\n", start_candidate.c_str());
+    printf("prefix: '%s'\n", prefix.c_str());
+    printf("suffix: '%s'\n", suffix.c_str());
+    printf("lowerBound: '%s'\n", lowerBound.c_str());
+    printf("upperBound: '%s'\n", upperBound.c_str());
+    printf("lower: '%s'\n", lower.c_str());
+    printf("upper: '%s'\n", upper.c_str());
+    printf("lowerBoundLimit: '%s'\n", lowerBoundLimit.c_str());
+    printf("upperBoundLimit: '%s'\n", upperBoundLimit.c_str());
+    printf("hashA: '%X'\n", target_hash_A);
+    printf("hashB: '%X'\n", target_hash_B);
 
     uint32_t h_cryptTable[0x500];
     prepareCryptTable(h_cryptTable);
     cudaMemcpyToSymbol(d_cryptTable, h_cryptTable, sizeof(h_cryptTable));
 
-    FILE* fout = fopen("matches.txt", "w");
+    FILE* fout = fopen("matches.txt", "a");
     if (!fout) {
         perror("fopen");
         return 1;
     }
 
-    std::string start_filename = getFilename(argv[1]);
-    int zLen = start_filename.size();
+    int zLen = start_candidate.size();
     while (true) {
-        std::string start_bound = make_bound_string(start_filename, zLen);
-//        printf("Starting bound: '%s'\n", start_bound.c_str());
+        std::string start_bound = make_bound_string(start_candidate, zLen);
 
-//        uint64_t total = 1;
-//        for (int i = 0; i < zLen; ++i) total *= ALPHABET_SIZE;
-
-        uint64_t startIdx = zStringToIndex(start_bound);
-//        printf("Char length = %d → Total combinations: %llu\n", zLen, (unsigned long long)total);
-        uint64_t endIdx = zStringToIndex(make_bound_string(upperBoundLimit, zLen));
+        uint64_t startIdx = stringToIndex(start_bound);
+        uint64_t endIdx = stringToIndex(make_bound_string(upperBoundLimit, zLen));
         printf("Starting at '%s'. Char length = %d → Total combinations: %llu\n", start_bound.c_str(), zLen, (unsigned long long)(endIdx - startIdx));
-//        printf("Total   : %llu\n", (unsigned long long)total);
-//        total -= endIdx;
-//        printf("endIdx  : %llu\n", (unsigned long long)endIdx);
-//        printf("Total - : %llu\n", (unsigned long long)total);
-//        printf("startIdx: %llu\n", (unsigned long long)startIdx);
 
-//        if (zLen > 11) goto breakfree;
         const uint64_t batchSize = 1000000;
         for (uint64_t i = startIdx; i < endIdx; i += batchSize) {
             uint64_t count = std::min(batchSize, endIdx - i);
             if (runCudaBatch(zLen, i, count, target_hash_A, target_hash_B, fout) == 1) goto breakfree;
         }
         zLen += 1;
+        start_candidate = lowerBoundLimit;
     }
 breakfree:
 
