@@ -148,27 +148,69 @@ void perform_analysis(std::map<int, std::vector<std::string>> length_to_string_m
     }
 }
 
+int try_name(std::string name, unsigned long target_hash_A, unsigned long target_hash_B, bool print_match = false, bool print_unmatch = false) {
+
+    unsigned int hashA = (unsigned int) HashString(name.c_str(), 1);
+    unsigned int hashB = (unsigned int) HashString(name.c_str(), 2);
+
+    if (hashA == target_hash_A && hashB == target_hash_B) {
+        printf("NAME MATCHES BOTH HASHES!!\n%s\n", name.c_str());
+        return 0;
+    } else if (hashA == target_hash_A || hashB == target_hash_B) {
+        if (print_match) {
+            printf("Name matches one hash %s\n", name.c_str());
+        }
+        return 1;
+    } else {
+        if (print_unmatch) {
+            printf("Name is invalid %s\n", name.c_str());
+        }
+        return -1;
+    }
+}
 
 int main(int argc, char *argv[]) {
-    if (argc < 6) {
+    if (argc < 6 && argc != 4) {
         printf("# Name Checker 1.0 by Johan Sjöblom\n");
-        printf("This program computes MPQ hashes to see if any of the\n");
-        printf("lines in the given file matches the given hashes.\n\n");
+        printf("This program computes MPQ hashes to see if the given name\n");
+        printf("matches the given hashes, or if the names inside the given\n");
+        printf("file matches the given hashes after prepending a prefix\n");
+        printf("and appending a suffix.\n\n");
+        printf("Usage: %s <name> <hashA> <hashB>\n", argv[0]);
         printf("Usage: %s <filename> <hashA> <hashB> <prefix> <suffix>\n", argv[0]);
-        if (argc == 1 || argc == 2 && (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help")) {
+        if (argc == 1 || (argc == 2 && (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help"))) {
             return 0;
         }
         return 1;
     }
     InitializeCryptTable();
 
-    std::string filename = argv[1];
-    std::string prefix = argv[4];
-    std::string suffix = argv[5];
+    std::string name = argv[1];
     unsigned long target_hash_A = std::stoul(argv[2], nullptr, 16);
     unsigned long target_hash_B = std::stoul(argv[3], nullptr, 16);
+    if (argc == 4) {
+        int return_value = 1;
+        if (try_name(name, target_hash_A, target_hash_B, true, false) == 0) {
+            return_value = 0;
+        }
+        for (size_t i = 0; i <= name.size() && return_value; ++i) {
+            std::string modified = name;
+            modified.insert(i, 1, '\\'); // Insert a single backslash at position i
+            if (try_name(modified, target_hash_A, target_hash_B, true, false) == 0) {
+                return_value = 0;
+            }
+        }
+        if (return_value == 0) {
+            printf("Both hashes match! '%s'\n", name.c_str());
+        } else {
+            printf("Both hashes do not match.\n");
+        }
+        return return_value;
+    }
+    std::string prefix = argv[4];
+    std::string suffix = argv[5];
 
-    std::ifstream file(filename);
+    std::ifstream file(name);
     if (!file) {
         std::cerr << "Error: could not open file.\n";
         return 1;
@@ -190,17 +232,9 @@ int main(int argc, char *argv[]) {
         length_to_string_map[s.length()].push_back(s);
 
         std::string name = prefix + line + suffix;
-
-        unsigned int hashA = (unsigned int) HashString(name.c_str(), 1);
-        unsigned int hashB = (unsigned int) HashString(name.c_str(), 2);
-        if (hashA == target_hash_A && hashB == target_hash_B) {
-            printf("NAME MATCHES BOTH HASHES!!\n%s\n", name.c_str());
+        if (try_name(name, target_hash_A, target_hash_B, false, true) == 0) {
             file.close();
             return 0;
-        } else if (hashA == target_hash_A || hashB == target_hash_B) {
-//            printf("Name matches one hash %s\n", name.c_str());
-        } else {
-            printf("Name is invalid %s\n", name.c_str());
         }
     }
     file.close();
