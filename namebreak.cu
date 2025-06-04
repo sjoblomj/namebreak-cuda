@@ -153,7 +153,7 @@ __global__ void bruteForceKernel(
     }
     ///
 
-    for (int split = 1; split < zLen; ++split) {
+    for (int split = 1; split <= zLen; ++split) {
         buildCandidate(Z, zLen, split, candidate);
 
         uint32_t hashA = mpqHash(candidate);
