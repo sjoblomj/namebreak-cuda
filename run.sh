@@ -1,6 +1,10 @@
 #!/bin/bash
 
-last_match=$(awk 'END{print}' matches.txt)
+if [ ! -f matches.txt ]; then
+    last_match="PORTRAIT\\U \\FID00.SMK"
+else
+    last_match=$(awk 'END{print}' matches.txt)
+fi
 
 # Looking for the real deal
 ./namebreak \
