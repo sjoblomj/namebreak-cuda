@@ -8,6 +8,7 @@ fi
 
 # Looking for the real deal
 ./namebreak \
+  continuous \
   "$last_match" \
   "PORTRAIT\U" \
   "FID00.SMK" \
@@ -18,6 +19,7 @@ fi
 
 # Looking for PORTRAIT\PARBITER\PABFID00.SMK
 #./namebreak \
+#  continuous \
 #  "$last_match" \
 #  "PORTRAIT\P" \
 #  "FID00.SMK" \
@@ -28,6 +30,7 @@ fi
 
 # Looking for PORTRAIT\UFLAG2\UF2FID00.SMK
 #./namebreak \
+#  continuous \
 #  "PORTRAIT\U FID00.SMK" \
 #  "PORTRAIT\U" \
 #  "FID00.SMK" \
@@ -38,6 +41,7 @@ fi
 
 # Looking for PORTRAIT\UDUKE\UDUFID00.SMK
 #./namebreak \
+#  continuous \
 #  "PORTRAIT\U FID00.SMK" \
 #  "PORTRAIT\U" \
 #  "FID00.SMK" \
@@ -48,6 +52,7 @@ fi
 
 # Looking for PORTRAIT\TVESSEL\TVEFID00.SMK
 #./namebreak \
+#  continuous \
 #  "PORTRAIT\TVESAEL\TVEFID00.SMK" \
 #  "PORTRAIT\T" \
 #  "FID00.SMK" \

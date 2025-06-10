@@ -142,7 +142,6 @@ __global__ void bruteForceKernel(
 
         uint32_t hashB = mpqHashSeed2(candidate);
         if (hashB == targetB) {
-            // DONE
             printf("BOTH HASHES MATCH: %s\n", candidate);
             d_foundMatchFlag = 1;
         }
@@ -162,7 +161,6 @@ __global__ void bruteForceKernel(
 
             uint32_t hashB = mpqHashSeed2(candidate);
             if (hashB == targetB) {
-                // DONE
                 printf("BOTH HASHES MATCH: %s\n", candidate);
                 d_foundMatchFlag = 1;
             }
@@ -299,8 +297,8 @@ std::string getUpperBound(const std::string& input) {
 
 
 int main(int argc, char* argv[]) {
-    if (argc < 8) {
-        fprintf(stderr, "Usage: %s <startCandidate> <prefix> <suffix> <lowerBound> <upperBound> <targetHashA> <targetHashB>\n", argv[0]);
+    if (argc < 9 || (strcmp(argv[1], "continuous") != 0 && strcmp(argv[1], "bounded") != 0)) {
+        fprintf(stderr, "Usage: %s <continuous|bounded> <startCandidate> <prefix> <suffix> <lowerBound> <upperBound> <targetHashA> <targetHashB>\n", argv[0]);
         return 1;
     }
     if (alphabet.size() != ALPHABET_SIZE) {
@@ -309,13 +307,14 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::string prefix = argv[2];
-    std::string suffix = argv[3];
-    std::string start_candidate = getStartCandidate(argv[1], prefix, suffix);
-    std::string lowerBound = argv[4];
-    std::string upperBound = argv[5];
-    uint32_t target_hash_A = std::stoul(argv[6], nullptr, 16);
-    uint32_t target_hash_B = std::stoul(argv[7], nullptr, 16);
+    std::string operation = argv[1];
+    std::string prefix = argv[3];
+    std::string suffix = argv[4];
+    std::string start_candidate = getStartCandidate(argv[2], prefix, suffix);
+    std::string lowerBound = argv[5];
+    std::string upperBound = argv[6];
+    uint32_t target_hash_A = std::stoul(argv[7], nullptr, 16);
+    uint32_t target_hash_B = std::stoul(argv[8], nullptr, 16);
 
     std::string lower = remove_prefix_and_suffix(lowerBound, prefix, suffix);
     std::string upper = remove_prefix_and_suffix(upperBound, prefix, suffix);
@@ -357,6 +356,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    bool found_match = false;
     int zLen = start_candidate.size();
     while (true) {
         std::string start_bound = make_bound_string(start_candidate, zLen);
@@ -368,13 +368,20 @@ int main(int argc, char* argv[]) {
         const uint64_t batchSize = 1000000;
         for (uint64_t i = startIdx; i < endIdx; i += batchSize) {
             uint64_t count = std::min(batchSize, endIdx - i);
-            if (runCudaBatch(zLen, i, count, target_hash_A, target_hash_B, fout) == 1) goto breakfree;
+            if (runCudaBatch(zLen, i, count, target_hash_A, target_hash_B, fout) == 1) {
+                found_match = true;
+                goto breakfree;
+            }
         }
         zLen += 1;
         start_candidate = lowerBoundLimit;
+        if (operation == "bounded") {
+            printf("Reached the upper limit; exiting");
+            goto breakfree;
+        }
     }
 breakfree:
 
     fclose(fout);
-    return 0;
+    return found_match ? 0 : 1;
 }
