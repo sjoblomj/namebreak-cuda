@@ -5,6 +5,10 @@
 #include <algorithm>
 #include <string>
 
+// Terminology:
+// * Candidate = The part of the name that we are brute-forcing
+// * Filename  = The Prefix + Candidate + Suffix
+
 #define ALPHABET_SIZE 49
 #define MAX_FILENAME_LEN 128
 #define MAX_MATCHES 1024
@@ -51,9 +55,9 @@ __device__ uint32_t mpqHashSeed2(const char* str) {
     return seed1;
 }
 
-__device__ void indexToZ(uint64_t index, int zLen, char* outZ) {
-    for (int i = zLen - 1; i >= 0; --i) {
-        outZ[i] = d_alphabet[index % ALPHABET_SIZE];
+__device__ void indexToCandidate(uint64_t index, int candidateLen, char* outCandidate) {
+    for (int i = candidateLen - 1; i >= 0; --i) {
+        outCandidate[i] = d_alphabet[index % ALPHABET_SIZE];
         index /= ALPHABET_SIZE;
     }
 }
@@ -71,17 +75,17 @@ uint64_t stringToIndex(const std::string& str) {
     return index;
 }
 
-__device__ void buildCandidate(const char* Z, int zLen, int split, char* out) {
+__device__ void buildFilename(const char* candidate, int candidateLen, int split, char* out) {
     memcpy(out, d_prefix, d_prefix_size);
     short i = d_prefix_size;
 
-    memcpy(out + i, Z, split);
+    memcpy(out + i, candidate, split);
     i += split;
 
     out[i++] = '\\';
 
-    memcpy(out + i, Z + split, zLen - split);
-    i += zLen - split;
+    memcpy(out + i, candidate + split, candidateLen - split);
+    i += candidateLen - split;
 
     memcpy(out + i, d_suffix, d_suffix_size);
     i += d_suffix_size;
@@ -89,13 +93,13 @@ __device__ void buildCandidate(const char* Z, int zLen, int split, char* out) {
     out[i] = '\0';
 }
 
-__device__ void buildCandidateWithoutBackslash(const char* Z, int zLen, char* out) {
+__device__ void buildFilenameWithoutBackslash(const char* candidate, int candidateLen, char* out) {
     short i = 0;
-    memcpy(out + i, d_prefix, d_prefix_size);
+    memcpy(out, d_prefix, d_prefix_size);
     i += d_prefix_size;
 
-    memcpy(out + i, Z, zLen);
-    i += zLen;
+    memcpy(out + i, candidate, candidateLen);
+    i += candidateLen;
 
     memcpy(out + i, d_suffix, d_suffix_size);
     i += d_suffix_size;
@@ -110,13 +114,13 @@ __device__ int my_strcmp (const char * s1, const char * s2) {
     return *(unsigned char *)s1 < *(unsigned char *)s2 ? -1 : 1;
 }
 
-__device__ bool inBounds(const char* z) {
-    return my_strcmp(z, lowerBound) >= 0 &&
-           my_strcmp(z, upperBound) <= 0;
+__device__ bool inBounds(const char* candidate) {
+    return my_strcmp(candidate, lowerBound) >= 0 &&
+           my_strcmp(candidate, upperBound) <= 0;
 }
 
 __global__ void bruteForceKernel(
-        int zLen,
+        int candidateLen,
         uint64_t startIdx,
         uint64_t total,
         uint32_t targetA,
@@ -129,44 +133,47 @@ __global__ void bruteForceKernel(
 
     idx += startIdx;
 
-    char Z[16];
-    char candidate[MAX_FILENAME_LEN];
+    char candidate[16];
+    char filename[MAX_FILENAME_LEN];
 
-    indexToZ(idx, zLen, Z);
+    indexToCandidate(idx, candidateLen, candidate);
 
+    // First try without backslash
     ///
-    buildCandidateWithoutBackslash(Z, zLen, candidate);
-    uint32_t hashA = mpqHash(candidate);
+    buildFilenameWithoutBackslash(candidate, candidateLen, filename);
+    uint32_t hashA = mpqHash(filename);
     if (hashA == targetA) {
-        printf("Hash A matches: %s\n", candidate);
+        printf("Hash A matches: %s\n", filename);
 
-        uint32_t hashB = mpqHashSeed2(candidate);
+        uint32_t hashB = mpqHashSeed2(filename);
         if (hashB == targetB) {
-            printf("BOTH HASHES MATCH: %s\n", candidate);
+            printf("BOTH HASHES MATCH: %s\n", filename);
             d_foundMatchFlag = 1;
         }
         int slot = atomicAdd(d_matchCount, 1);
         if (slot < MAX_MATCHES) {
-            memcpy(&d_matches[slot * MAX_FILENAME_LEN], candidate, MAX_FILENAME_LEN);
+            memcpy(&d_matches[slot * MAX_FILENAME_LEN], filename, MAX_FILENAME_LEN);
         }
     }
     ///
 
-    for (int split = 1; split <= zLen; ++split) {
-        buildCandidate(Z, zLen, split, candidate);
+    // Then try with all possible splits
+    for (int split = 1; split <= candidateLen; ++split) {
+        buildFilename(candidate, candidateLen, split, filename);
 
-        uint32_t hashA = mpqHash(candidate);
+        uint32_t hashA = mpqHash(filename);
         if (hashA == targetA) {
-            printf("Hash A matches: %s\n", candidate);
+            printf("Hash A matches: %s\n", filename);
 
-            uint32_t hashB = mpqHashSeed2(candidate);
+            uint32_t hashB = mpqHashSeed2(filename);
             if (hashB == targetB) {
-                printf("BOTH HASHES MATCH: %s\n", candidate);
+                printf("BOTH HASHES MATCH: %s\n", filename);
                 d_foundMatchFlag = 1;
             }
+
             int slot = atomicAdd(d_matchCount, 1);
             if (slot < MAX_MATCHES) {
-                memcpy(&d_matches[slot * MAX_FILENAME_LEN], candidate, MAX_FILENAME_LEN);
+                memcpy(&d_matches[slot * MAX_FILENAME_LEN], filename, MAX_FILENAME_LEN);
             }
         }
     }
@@ -186,7 +193,7 @@ void prepareCryptTable(uint32_t* table) {
     }
 }
 
-int runCudaBatch(int zLen, uint64_t startIdx, uint64_t count, uint32_t targetA, uint32_t targetB, FILE* fout) {
+int runCudaBatch(int candidateLen, uint64_t startIdx, uint64_t count, uint32_t targetA, uint32_t targetB, FILE* fout) {
     int h_flag = 0;
     cudaMemcpyFromSymbol(&h_flag, d_foundMatchFlag, sizeof(int));
 
@@ -201,7 +208,7 @@ int runCudaBatch(int zLen, uint64_t startIdx, uint64_t count, uint32_t targetA, 
     int blocks = (count + threadsPerBlock - 1) / threadsPerBlock;
 
     bruteForceKernel<<<blocks, threadsPerBlock>>>(
-            zLen, startIdx, count, targetA, targetB, d_matches, d_matchCount
+            candidateLen, startIdx, count, targetA, targetB, d_matches, d_matchCount
     );
     cudaDeviceSynchronize();
 
@@ -240,13 +247,13 @@ std::string getStartCandidate(std::string path, std::string prefix, std::string 
     return middle;
 }
 
-std::string make_bound_string(std::string input, int zLen) {
-    // return a copy of start_filename. Append the last character until the result string has length zLen
+std::string make_bound_string(std::string input, int candidateLen) {
+    // Return a copy of start_filename. Append the last character until the result string has length candidateLen
     std::string result = input;
-    for (int i = input.size(); i < zLen; ++i) {
+    for (int i = input.size(); i < candidateLen; ++i) {
         result += result.back();
     }
-    return result.substr(0, zLen);
+    return result.substr(0, candidateLen);
 }
 
 std::string remove_prefix_and_suffix(std::string base, std::string prefix, std::string suffix) {
@@ -357,23 +364,23 @@ int main(int argc, char* argv[]) {
     }
 
     bool found_match = false;
-    int zLen = start_candidate.size();
+    int candidateLen = start_candidate.size();
     while (true) {
-        std::string start_bound = make_bound_string(start_candidate, zLen);
+        std::string start_bound = make_bound_string(start_candidate, candidateLen);
 
         uint64_t startIdx = stringToIndex(start_bound);
-        uint64_t endIdx = stringToIndex(make_bound_string(upperBoundLimit, zLen));
-        printf("Starting at '%s'. Char length = %d → Total combinations: %llu\n", start_bound.c_str(), zLen, (unsigned long long)(endIdx - startIdx));
+        uint64_t endIdx = stringToIndex(make_bound_string(upperBoundLimit, candidateLen));
+        printf("Starting at '%s'. Char length = %d → Total combinations: %llu\n", start_bound.c_str(), candidateLen, (unsigned long long)(endIdx - startIdx));
 
         const uint64_t batchSize = 1000000;
         for (uint64_t i = startIdx; i < endIdx; i += batchSize) {
             uint64_t count = std::min(batchSize, endIdx - i);
-            if (runCudaBatch(zLen, i, count, target_hash_A, target_hash_B, fout) == 1) {
+            if (runCudaBatch(candidateLen, i, count, target_hash_A, target_hash_B, fout) == 1) {
                 found_match = true;
                 goto breakfree;
             }
         }
-        zLen += 1;
+        candidateLen += 1;
         start_candidate = lowerBoundLimit;
         if (operation == "bounded") {
             printf("Reached the upper limit; exiting");
