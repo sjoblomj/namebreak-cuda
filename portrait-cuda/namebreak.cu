@@ -1,22 +1,15 @@
 #include <cuda_runtime.h>
-#include <cstdio>
-#include <cstring>
-#include <cstdint>
-#include <algorithm>
-#include <string>
+#include "cpu-utils.h"
+#include "constants.h"
 
 // Terminology:
 // * Candidate = The part of the name that we are brute-forcing
 // * Filename  = The Prefix + Candidate + Suffix
 
-#define ALPHABET_SIZE 49
-#define MAX_FILENAME_LEN 128
-#define MAX_MATCHES 1024
-
-__device__ volatile int d_foundMatchFlag = 0;
-
 __device__ __constant__ char d_alphabet[ALPHABET_SIZE + 1] = " !&'()+,-.0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_";
 const std::string alphabet = " !&'()+,-.0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_";
+
+__device__ volatile int d_foundMatchFlag = 0;
 
 __device__ __constant__ char d_prefix[64];
 __device__ __constant__ char d_suffix[64];
@@ -60,19 +53,6 @@ __device__ void indexToCandidate(uint64_t index, int candidateLen, char* outCand
         outCandidate[i] = d_alphabet[index % ALPHABET_SIZE];
         index /= ALPHABET_SIZE;
     }
-}
-
-uint64_t stringToIndex(const std::string& str) {
-    uint64_t index = 0;
-    for (char c : str) {
-        size_t pos = alphabet.find(c);
-        if (pos == std::string::npos) {
-            fprintf(stderr, "Invalid character in string: '%c'\n", c);
-            exit(1);
-        }
-        index = index * alphabet.size() + pos;
-    }
-    return index;
 }
 
 __device__ void buildFilename(const char* candidate, int candidateLen, int split, char* out) {
@@ -120,13 +100,13 @@ __device__ bool inBounds(const char* candidate) {
 }
 
 __global__ void bruteForceKernel(
-        int candidateLen,
-        uint64_t startIdx,
-        uint64_t total,
-        uint32_t targetA,
-        uint32_t targetB,
-        char* d_matches,
-        int* d_matchCount
+    int candidateLen,
+    uint64_t startIdx,
+    uint64_t total,
+    uint32_t targetA,
+    uint32_t targetB,
+    char* d_matches,
+    int* d_matchCount
 ) {
     uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= total) return;
@@ -179,19 +159,6 @@ __global__ void bruteForceKernel(
     }
 }
 
-void prepareCryptTable(uint32_t* table) {
-    uint32_t seed = 0x00100001;
-    for (int index1 = 0; index1 < 0x100; ++index1) {
-        for (int i = 0; i < 5; ++i) {
-            int index2 = i * 0x100 + index1;
-            seed = (seed * 125 + 3) % 0x2AAAAB;
-            uint32_t temp1 = (seed & 0xFFFF) << 0x10;
-            seed = (seed * 125 + 3) % 0x2AAAAB;
-            uint32_t temp2 = (seed & 0xFFFF);
-            table[index2] = temp1 | temp2;
-        }
-    }
-}
 
 int runCudaBatch(int candidateLen, uint64_t startIdx, uint64_t count, uint32_t targetA, uint32_t targetB, FILE* fout) {
     int h_flag = 0;
@@ -229,80 +196,6 @@ int runCudaBatch(int candidateLen, uint64_t startIdx, uint64_t count, uint32_t t
     return h_flag;
 }
 
-
-
-std::string getStartCandidate(std::string path, std::string prefix, std::string suffix) {
-    std::string full = path;
-
-    // Remove prefix and suffix
-    if (full.rfind(prefix, 0) != 0 || full.size() <= prefix.size() + suffix.size()) {
-        fprintf(stderr, "Invalid start filename format.\n");
-        return nullptr;
-    }
-
-    std::string middle = full.substr(prefix.size(), full.size() - prefix.size() - suffix.size());
-
-    // Remove backslash
-    middle.erase(std::remove(middle.begin(), middle.end(), '\\'), middle.end());
-    return middle;
-}
-
-std::string make_bound_string(std::string input, int candidateLen) {
-    // Return a copy of start_filename. Append the last character until the result string has length candidateLen
-    std::string result = input;
-    for (int i = input.size(); i < candidateLen; ++i) {
-        result += result.back();
-    }
-    return result.substr(0, candidateLen);
-}
-
-std::string remove_prefix_and_suffix(std::string base, std::string prefix, std::string suffix) {
-    std::string str = base;
-    if (str.find(prefix) == 0) {
-        str = str.substr(prefix.length());
-    }
-    if (str.size() >= suffix.size() && str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0) {
-        str = str.substr(0, str.size() - suffix.size());
-    }
-    str.erase(std::remove(str.begin(), str.end(), '\\'), str.end());
-    return str;
-}
-
-std::string getLowerBound(const std::string& input) {
-    std::string result = input;
-    if (result.empty()) return std::string(16, ' ');
-
-    // Find index of the last character
-    char& lastChar = result.back();
-    auto pos = alphabet.find(lastChar);
-    if (pos == std::string::npos || pos + 1 >= alphabet.size()) {
-        fprintf(stderr, "Cannot bump last character or character not in alphabet\n");
-    }
-    lastChar = alphabet[pos - 1];
-
-    // Pad with underscores to length 16
-    result.resize(16, '_');
-    return result;
-}
-
-std::string getUpperBound(const std::string& input) {
-    std::string result = input;
-    if (result.empty()) return std::string(16, ' ');
-
-    // Find index of the last character
-    char& lastChar = result.back();
-    auto pos = alphabet.find(lastChar);
-    if (pos == std::string::npos || pos + 1 >= alphabet.size()) {
-        fprintf(stderr, "Cannot bump last character or character not in alphabet\n");
-    }
-    lastChar = alphabet[pos + 1];
-
-    // Pad with spaces to length 16
-    result.resize(16, ' ');
-    return result;
-}
-
-
 int main(int argc, char* argv[]) {
     if (argc < 9 || (strcmp(argv[1], "continuous") != 0 && strcmp(argv[1], "bounded") != 0)) {
         fprintf(stderr, "Usage: %s <continuous|bounded> <startCandidate> <prefix> <suffix> <lowerBound> <upperBound> <targetHashA> <targetHashB>\n", argv[0]);
@@ -338,8 +231,8 @@ int main(int argc, char* argv[]) {
     cudaMemcpyToSymbol(lowerBound, lower.c_str(), lower.size() + 1);
     cudaMemcpyToSymbol(upperBound, upper.c_str(), upper.size() + 1);
 
-    std::string lowerBoundLimit = getLowerBound(lower);
-    std::string upperBoundLimit = getUpperBound(upper);
+    std::string lowerBoundLimit = getLowerBound(lower, alphabet);
+    std::string upperBoundLimit = getUpperBound(upper, alphabet);
 
     printf("candidate: '%s'\n", start_candidate.c_str());
     printf("prefix: '%s'\n", prefix.c_str());
@@ -368,8 +261,8 @@ int main(int argc, char* argv[]) {
     while (true) {
         std::string start_bound = make_bound_string(start_candidate, candidateLen);
 
-        uint64_t startIdx = stringToIndex(start_bound);
-        uint64_t endIdx = stringToIndex(make_bound_string(upperBoundLimit, candidateLen));
+        uint64_t startIdx = stringToIndex(start_bound, alphabet);
+        uint64_t endIdx = stringToIndex(make_bound_string(upperBoundLimit, candidateLen), alphabet);
         printf("Starting at '%s'. Char length = %d → Total combinations: %llu\n", start_bound.c_str(), candidateLen, (unsigned long long)(endIdx - startIdx));
 
         const uint64_t batchSize = 1000000;
@@ -390,5 +283,5 @@ int main(int argc, char* argv[]) {
 breakfree:
 
     fclose(fout);
-    return found_match ? 0 : 1;
+    return found_match ? 0 : 2;
 }
