@@ -10,7 +10,6 @@ __device__ __constant__ char d_alphabet[ALPHABET_SIZE + 1] = " !&'()+,-.01234567
 const std::string alphabet = " !&'()+,-.0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_";
 
 __device__ volatile int d_foundMatchFlag = 0;
-
 __device__ __constant__ char d_prefix[64];
 __device__ __constant__ char d_suffix[64];
 __device__ __constant__ char d_lowerBound[64];
@@ -19,12 +18,14 @@ __device__ __constant__ char lowerBound[64];
 __device__ __constant__ char upperBound[64];
 __device__ __constant__ short d_prefix_size;
 __device__ __constant__ short d_suffix_size;
+__device__ __constant__ uint32_t d_seed1_start;
+__device__ __constant__ uint32_t d_seed2_start;
 
 __device__ __constant__ uint32_t d_cryptTable[0x500];
 
 __device__ uint32_t mpqHash(const char* str) {
-    uint32_t seed1 = 0x7FED7FED;
-    uint32_t seed2 = 0xEEEEEEEE;
+    uint32_t seed1 = d_seed1_start;
+    uint32_t seed2 = d_seed2_start;
     char ch;
 
     while ((ch = *str++) != '\0') {
@@ -55,14 +56,16 @@ __device__ void indexToCandidate(uint64_t index, int candidateLen, char* outCand
     }
 }
 
-__device__ void buildFilename(const char* candidate, int candidateLen, int split, char* out) {
+__device__ void buildCompleteFilename(const char* candidate, int candidateLen, int split, char* out) {
     memcpy(out, d_prefix, d_prefix_size);
     short i = d_prefix_size;
 
-    memcpy(out + i, candidate, split);
-    i += split;
+    if (split > 0) {
+        memcpy(out + i, candidate, split);
+        i += split;
 
-    out[i++] = '\\';
+        out[i++] = '\\';
+    }
 
     memcpy(out + i, candidate + split, candidateLen - split);
     i += candidateLen - split;
@@ -73,30 +76,20 @@ __device__ void buildFilename(const char* candidate, int candidateLen, int split
     out[i] = '\0';
 }
 
-__device__ void buildFilenameWithoutBackslash(const char* candidate, int candidateLen, char* out) {
-    short i = 0;
-    memcpy(out, d_prefix, d_prefix_size);
-    i += d_prefix_size;
+__device__ void buildFilenameWithoutPrefixAndWithBackslash(const char* candidate, int candidateLen, int split, char* out) {
+    memcpy(out, candidate, split);
+    out[split] = '\\';
+    memcpy(out + split + 1, candidate + split, candidateLen - split);
+    memcpy(out + candidateLen + 1, d_suffix, d_suffix_size);
 
-    memcpy(out + i, candidate, candidateLen);
-    i += candidateLen;
-
-    memcpy(out + i, d_suffix, d_suffix_size);
-    i += d_suffix_size;
-
-    out[i] = '\0';
+    out[candidateLen + 1 + d_suffix_size] = '\0';
 }
 
-__device__ int my_strcmp (const char * s1, const char * s2) {
-    for(; *s1 == *s2; ++s1, ++s2)
-        if(*s1 == 0)
-            return 0;
-    return *(unsigned char *)s1 < *(unsigned char *)s2 ? -1 : 1;
-}
+__device__ void buildFilenameWithoutPrefixAndWithoutBackslash(const char* candidate, int candidateLen, char* out) {
+    memcpy(out, candidate, candidateLen);
+    memcpy(out + candidateLen, d_suffix, d_suffix_size);
 
-__device__ bool inBounds(const char* candidate) {
-    return my_strcmp(candidate, lowerBound) >= 0 &&
-           my_strcmp(candidate, upperBound) <= 0;
+    out[candidateLen + d_suffix_size] = '\0';
 }
 
 __global__ void bruteForceKernel(
@@ -120,9 +113,10 @@ __global__ void bruteForceKernel(
 
     // First try without backslash
     ///
-    buildFilenameWithoutBackslash(candidate, candidateLen, filename);
+    buildFilenameWithoutPrefixAndWithBackslash(candidate, candidateLen, filename);
     uint32_t hashA = mpqHash(filename);
     if (hashA == targetA) {
+        buildCompleteFilename(candidate, candidateLen, 0, filename);
         printf("Hash A matches: %s\n", filename);
 
         uint32_t hashB = mpqHashSeed2(filename);
@@ -139,10 +133,11 @@ __global__ void bruteForceKernel(
 
     // Then try with all possible splits
     for (int split = 1; split <= candidateLen; ++split) {
-        buildFilename(candidate, candidateLen, split, filename);
+        buildFilenameWithoutPrefixAndWithBackslash(candidate, candidateLen, split, filename);
 
         uint32_t hashA = mpqHash(filename);
         if (hashA == targetA) {
+            buildCompleteFilename(candidate, candidateLen, split, filename);
             printf("Hash A matches: %s\n", filename);
 
             uint32_t hashB = mpqHashSeed2(filename);
@@ -250,6 +245,12 @@ int main(int argc, char* argv[]) {
     prepareCryptTable(h_cryptTable);
     cudaMemcpyToSymbol(d_cryptTable, h_cryptTable, sizeof(h_cryptTable));
 
+    std::pair<uint32_t, uint32_t> pair = mpqHashWithPrefixCache_CPU(prefix.c_str(), h_cryptTable);
+    uint32_t seed1_start = pair.first;
+    uint32_t seed2_start = pair.second;
+    cudaMemcpyToSymbol(d_seed1_start, &seed1_start, sizeof(seed1_start));
+    cudaMemcpyToSymbol(d_seed2_start, &seed2_start, sizeof(seed2_start));
+
     FILE* fout = fopen("matches.txt", "a");
     if (!fout) {
         perror("fopen");
@@ -265,7 +266,7 @@ int main(int argc, char* argv[]) {
         uint64_t endIdx = stringToIndex(make_bound_string(upperBoundLimit, candidateLen), alphabet);
         printf("Starting at '%s'. Char length = %d → Total combinations: %llu\n", start_bound.c_str(), candidateLen, (unsigned long long)(endIdx - startIdx));
 
-        const uint64_t batchSize = 1000000;
+        const uint64_t batchSize = ALPHABET_SIZE * ALPHABET_SIZE * ALPHABET_SIZE * ALPHABET_SIZE;
         for (uint64_t i = startIdx; i < endIdx; i += batchSize) {
             uint64_t count = std::min(batchSize, endIdx - i);
             if (runCudaBatch(candidateLen, i, count, target_hash_A, target_hash_B, fout) == 1) {
