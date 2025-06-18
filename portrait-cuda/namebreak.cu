@@ -113,7 +113,7 @@ __global__ void bruteForceKernel(
 
     // First try without backslash
     ///
-    buildFilenameWithoutPrefixAndWithBackslash(candidate, candidateLen, filename);
+    buildFilenameWithoutPrefixAndWithoutBackslash(candidate, candidateLen, filename);
     uint32_t hashA = mpqHash(filename);
     if (hashA == targetA) {
         buildCompleteFilename(candidate, candidateLen, 0, filename);
