@@ -23,20 +23,6 @@ std::pair<uint32_t, uint32_t > mpqHashWithPrefixCache_CPU(const char* str, const
     return {seed1, seed2};
 }
 
-uint64_t stringToIndex(const std::string& str, std::string alphabet) {
-    uint64_t index = 0;
-    for (char c : str) {
-        size_t pos = alphabet.find(c);
-        if (pos == std::string::npos) {
-            fprintf(stderr, "Invalid character in string: '%c'\n", c);
-            exit(1);
-        }
-        index = index * alphabet.size() + pos;
-    }
-    return index;
-}
-
-
 void prepareCryptTable(uint32_t* table) {
     uint32_t seed = 0x00100001;
     for (int index1 = 0; index1 < 0x100; ++index1) {
@@ -49,6 +35,20 @@ void prepareCryptTable(uint32_t* table) {
             table[index2] = temp1 | temp2;
         }
     }
+}
+
+
+uint64_t stringToIndex(const std::string& str, std::string alphabet) {
+    uint64_t index = 0;
+    for (char c : str) {
+        size_t pos = alphabet.find(c);
+        if (pos == std::string::npos) {
+            fprintf(stderr, "Invalid character in string: '%c'\n", c);
+            exit(1);
+        }
+        index = index * alphabet.size() + pos;
+    }
+    return index;
 }
 
 
@@ -69,7 +69,7 @@ std::string getStartCandidate(std::string path, std::string prefix, std::string 
 }
 
 std::string make_bound_string(std::string input, int candidateLen) {
-    // Return a copy of start_filename. Append the last character until the result string has length candidateLen
+    // Return a copy of the given input string. Append the last character until the result string has length candidateLen
     std::string result = input;
     for (int i = input.size(); i < candidateLen; ++i) {
         result += result.back();
@@ -120,5 +120,17 @@ std::string getUpperBound(const std::string& input, std::string alphabet) {
 
     // Pad with spaces to length 16
     result.resize(16, ' ');
+    return result;
+}
+
+std::string combine_strings_and_insert_backslash(std::string pre, std::string str, short backslash_pos) {
+    std::string result = pre;
+    if (backslash_pos >= 0 && backslash_pos <= str.size()) {
+        result += str.substr(0, backslash_pos);
+        result += "\\";
+        result += str.substr(backslash_pos);
+    } else {
+        result += str;
+    }
     return result;
 }

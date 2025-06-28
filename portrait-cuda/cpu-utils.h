@@ -15,5 +15,6 @@ std::string make_bound_string(std::string input, int candidateLen);
 std::string remove_prefix_and_suffix(std::string base, std::string prefix, std::string suffix);
 std::string getLowerBound(const std::string& input, std::string alphabet);
 std::string getUpperBound(const std::string& input, std::string alphabet);
+std::string combine_strings_and_insert_backslash(std::string pre, std::string str, short backslash_pos);
 
 #endif //NAMEBREAK_CUDA_CPU_UTILS_H
